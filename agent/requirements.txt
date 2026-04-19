@@ -1,0 +1,5 @@
+google-genai>=0.3.0
+Pillow>=10.0.0
+# Optional: enables GeoTIFF metadata extraction (CRS, bounds, resolution).
+# Install separately if you need it — requires GDAL system libs.
+# rasterio>=1.3
