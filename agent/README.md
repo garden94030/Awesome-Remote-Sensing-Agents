@@ -69,3 +69,39 @@ output, or `--model gemini-2.5-flash` for a faster/cheaper run.
 | `change` | alignment quality, list of changes with magnitude & confidence, stable features, verdict |
 | `custom` | free text |
 | `batch` | array of `describe` / `classify` / `detect` results over a folder |
+| `grayzone` | maritime / infrastructure / NDVI-NDWI indicators of gray-zone coercion, with benign explanations and confidence per finding |
+
+## Gray-zone analysis workflow (for small scenes with NDVI / NDWI)
+
+If your scenes are small and you have already computed NDVI / NDWI in QGIS:
+
+1. In QGIS, for each scene, export three rendered PNGs at the **same extent**:
+   - `rgb.png`   — true-colour composite
+   - `ndvi.png`  — NDVI styled with a colour ramp
+   - `ndwi.png`  — NDWI styled with a colour ramp
+   (Project → Import/Export → Export Map to Image, or right-click layer →
+   Export → Save As → Rendered image, with "Map canvas extent" + a modest
+   resolution like 2048 px wide. Small is fine — Gemini sees everything.)
+
+2. Run:
+
+   ```bash
+   python rs_agent.py grayzone \
+     --rgb  path\to\rgb.png \
+     --ndvi path\to\ndvi.png \
+     --ndwi path\to\ndwi.png \
+     --context "金門本島西側海岸, 2026年3月, Pleiades 0.5 m" \
+     -o kinmen_grayzone.json
+   ```
+
+3. The more specific the `--context` string, the sharper the analysis.
+   Include: rough location, date, sensor name, ground sampling distance,
+   and any known civilian features you want the model to treat as benign
+   baseline (e.g. "a civilian port sits at south-west of the frame").
+
+4. Extra layers are supported via `--extra LABEL=PATH`, e.g.
+   `--extra sar=./sar.png --extra thermal=./thermal.png`.
+
+Output is structured JSON with three categories — maritime_indicators,
+infrastructure_indicators, environmental_index_findings — each with
+visual evidence, **benign explanations**, concern level, and confidence.

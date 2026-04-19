@@ -220,7 +220,90 @@ IMAGE 2 (later/target). Return JSON with exactly these keys:
 
 If alignment_quality is "different-area", set changes to [] and explain in
 overall_verdict. Return ONLY the JSON object.""",
+
+    "grayzone": """You are analysing remote-sensing imagery for observable
+indicators of gray-zone coercion activity in a contested maritime/coastal
+setting (e.g., Taiwan Strait, South China Sea, East China Sea). You may
+receive one or several co-registered layers for the SAME scene — typically
+some subset of: RGB true-colour, NDVI (vegetation index), NDWI (water index),
+or other derived rasters. Layer labels and any analyst context are provided.
+
+Do NOT invent coordinates, dates, vessel names, or unit designators.
+Only report what is visible. For every finding, prefer specific evidence
+(shape, extent, plume, wake, shadow, index value pattern) over vague claims.
+Always offer plausible BENIGN explanations alongside concerning ones.
+
+Return JSON with exactly these keys:
+
+{
+  "aoi_context_echo": "<one-line echo of the analyst context given, or 'none provided'>",
+  "layers_used": [<list of layer labels received>],
+  "maritime_indicators": [
+    {
+      "indicator": "vessel_concentration|dredging|land_reclamation|harbor_modification|boom_buoy_line|fishing_fleet_anomaly|suspected_dark_vessel|sediment_plume|other",
+      "description": "<what is visible>",
+      "location": "<rough position in frame, e.g. 'west shoreline', 'top-right bay'>",
+      "visual_evidence": "<hull shapes, wakes, plumes, shadows, band/index signature>",
+      "concern_level": "low|medium|high",
+      "benign_explanations": ["<plausible non-coercive reasons, e.g. normal fishing season, civilian dredging permit>"],
+      "confidence": "low|medium|high"
+    }
+  ],
+  "infrastructure_indicators": [
+    {
+      "indicator": "new_construction|runway_or_helipad_change|radar_or_comms_installation|fuel_storage|new_road_to_coast|camouflage_pattern|dual_use_pier|other",
+      "description": "<what is visible>",
+      "location": "<rough position>",
+      "visual_evidence": "<shape, size, shadow, materials>",
+      "concern_level": "low|medium|high",
+      "benign_explanations": ["<civilian development, tourism, legitimate defence of civilian assets, etc.>"],
+      "confidence": "low|medium|high"
+    }
+  ],
+  "environmental_index_findings": [
+    {
+      "indicator": "vegetation_loss|vegetation_gain|coastline_advance|coastline_retreat|new_water_body|water_body_loss|turbidity_change|other",
+      "description": "<what the NDVI/NDWI or other index pattern shows>",
+      "location": "<where>",
+      "magnitude": "small|medium|large",
+      "concern_level": "low|medium|high",
+      "confidence": "low|medium|high"
+    }
+  ],
+  "what_would_raise_confidence": ["<specific follow-ups: higher-res imagery, AIS cross-check, multi-date comparison, SAR for dark vessels, field photograph, etc.>"],
+  "limitations": "<resolution, cloud, illumination, index calibration, or aoi-coverage limits on this analysis>",
+  "overall_assessment": "<2-4 sentence summary: is there visual evidence consistent with gray-zone activity in this frame; how strong; what is the most important single finding>"
 }
+
+If you see NO gray-zone-relevant indicators, still return the JSON with empty
+arrays and an honest overall_assessment. Return ONLY the JSON object.""",
+}
+
+
+def build_grayzone_contents(
+    layers: list[tuple[str, LoadedImage]],
+    context: str | None,
+) -> list:
+    """Assemble labeled multi-layer contents for the grayzone task."""
+    parts: list = []
+    labels = []
+    for label, img in layers:
+        parts.append(f"[Layer: {label}]")
+        parts.append(types.Part.from_bytes(data=img.data, mime_type=img.mime_type))
+        labels.append(label)
+        if img.geo_meta:
+            parts.append(
+                f"[Geo-metadata for {label}] CRS={img.geo_meta.get('crs')}, "
+                f"size={img.geo_meta.get('width')}x{img.geo_meta.get('height')}, "
+                f"bounds={img.geo_meta.get('bounds')}, res={img.geo_meta.get('resolution')}"
+            )
+    if context:
+        parts.append(f"[Analyst context] {context}")
+    else:
+        parts.append("[Analyst context] none provided")
+    parts.append(f"[Layers provided] {', '.join(labels)}")
+    parts.append(TASK_PROMPTS["grayzone"])
+    return parts
 
 
 def build_contents(
@@ -391,6 +474,24 @@ def main() -> None:
     p_cust.add_argument("image", type=Path)
     p_cust.add_argument("--prompt", required=True)
 
+    p_gz = sub.add_parser(
+        "grayzone",
+        help="Gray-zone coercion indicators (pass RGB + NDVI + NDWI of same scene).",
+    )
+    p_gz.add_argument("--rgb", type=Path, required=True,
+                      help="True-colour image of the scene (required).")
+    p_gz.add_argument("--ndvi", type=Path, default=None,
+                      help="NDVI raster rendered as PNG/JPG (optional).")
+    p_gz.add_argument("--ndwi", type=Path, default=None,
+                      help="NDWI raster rendered as PNG/JPG (optional).")
+    p_gz.add_argument("--extra", action="append", default=[],
+                      metavar="LABEL=PATH",
+                      help="Additional labelled layer, repeatable. "
+                           "Example: --extra sar=./sar.png")
+    p_gz.add_argument("--context", default=None,
+                      help="One-line AOI context: location, date, sensor, resolution, "
+                           "known features. Greatly improves analysis quality.")
+
     p_batch = sub.add_parser("batch", help="Run a task over every image in a directory.")
     p_batch.add_argument("directory", type=Path)
     p_batch.add_argument("--task", required=True,
@@ -415,6 +516,24 @@ def main() -> None:
         contents = build_contents("custom", images, extra_prompt=args.prompt)
         text = call_gemini(client, args.model, contents, want_json=False)
         emit_output("custom", images, text, want_json=False, out_path=args.output)
+        return
+
+    if args.task == "grayzone":
+        layers: list[tuple[str, LoadedImage]] = [("rgb", load_image(args.rgb))]
+        if args.ndvi:
+            layers.append(("ndvi", load_image(args.ndvi)))
+        if args.ndwi:
+            layers.append(("ndwi", load_image(args.ndwi)))
+        for spec in args.extra:
+            if "=" not in spec:
+                sys.stderr.write(f"--extra must be LABEL=PATH, got: {spec}\n")
+                sys.exit(2)
+            label, p = spec.split("=", 1)
+            layers.append((label.strip(), load_image(Path(p))))
+        contents = build_grayzone_contents(layers, args.context)
+        text = call_gemini(client, args.model, contents, want_json=True)
+        all_imgs = [img for _, img in layers]
+        emit_output("grayzone", all_imgs, text, want_json=True, out_path=args.output)
         return
 
     if args.task == "batch":
