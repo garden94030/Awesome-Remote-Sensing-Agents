@@ -441,41 +441,53 @@ def iter_images(path: Path, glob: str) -> Iterable[Path]:
 def main() -> None:
     load_env_file()
 
+    # Common flags — attached to every subparser via `parents=[common]`
+    # so `-o` / `--text` / `--model` work AFTER the subcommand name too,
+    # matching the intuitive order  `rs_agent.py describe PATH -o out.json`.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--model", default=DEFAULT_MODEL,
+                        help=f"Gemini model id (default: {DEFAULT_MODEL})")
+    common.add_argument("-o", "--output", type=Path, default=None,
+                        help="Write result to file instead of stdout.")
+    common.add_argument("--text", action="store_true",
+                        help="Request plain text output instead of JSON.")
+
     parser = argparse.ArgumentParser(
+        parents=[common],
         description="Local remote-sensing analysis with Gemini.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--model", default=DEFAULT_MODEL,
-                        help=f"Gemini model id (default: {DEFAULT_MODEL})")
-    parser.add_argument("-o", "--output", type=Path, default=None,
-                        help="Write result to file instead of stdout.")
-    parser.add_argument("--text", action="store_true",
-                        help="Request plain text output instead of JSON.")
 
     sub = parser.add_subparsers(dest="task", required=True)
 
-    p_desc = sub.add_parser("describe", help="General structured description.")
+    p_desc = sub.add_parser("describe", parents=[common],
+                            help="General structured description.")
     p_desc.add_argument("image", type=Path)
 
-    p_cls = sub.add_parser("classify", help="Land-cover classification (ESA WorldCover).")
+    p_cls = sub.add_parser("classify", parents=[common],
+                           help="Land-cover classification (ESA WorldCover).")
     p_cls.add_argument("image", type=Path)
 
-    p_det = sub.add_parser("detect", help="Detect named object categories.")
+    p_det = sub.add_parser("detect", parents=[common],
+                           help="Detect named object categories.")
     p_det.add_argument("image", type=Path)
     p_det.add_argument("--target", default="buildings,roads,vehicles",
                        help="Comma-separated target categories.")
 
-    p_chg = sub.add_parser("change", help="Change detection between two images.")
+    p_chg = sub.add_parser("change", parents=[common],
+                           help="Change detection between two images.")
     p_chg.add_argument("before", type=Path, help="Earlier image.")
     p_chg.add_argument("after", type=Path, help="Later image.")
 
-    p_cust = sub.add_parser("custom", help="Custom free-form prompt on one image.")
+    p_cust = sub.add_parser("custom", parents=[common],
+                            help="Custom free-form prompt on one image.")
     p_cust.add_argument("image", type=Path)
     p_cust.add_argument("--prompt", required=True)
 
     p_gz = sub.add_parser(
         "grayzone",
+        parents=[common],
         help="Gray-zone coercion indicators (pass RGB + NDVI + NDWI of same scene).",
     )
     p_gz.add_argument("--rgb", type=Path, required=True,
@@ -492,7 +504,8 @@ def main() -> None:
                       help="One-line AOI context: location, date, sensor, resolution, "
                            "known features. Greatly improves analysis quality.")
 
-    p_batch = sub.add_parser("batch", help="Run a task over every image in a directory.")
+    p_batch = sub.add_parser("batch", parents=[common],
+                             help="Run a task over every image in a directory.")
     p_batch.add_argument("directory", type=Path)
     p_batch.add_argument("--task", required=True,
                          choices=["describe", "classify", "detect"])
